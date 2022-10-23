@@ -4,7 +4,7 @@ use std::convert::TryFrom;
 use std::io::{self, Cursor};
 
 use bytes::Bytes;
-use futures::{future::BoxFuture, FutureExt, StreamExt};
+use futures_util::{future::BoxFuture, FutureExt, StreamExt};
 use headers::HeaderMapExt;
 use http::{Request, Response, StatusCode};
 
@@ -801,7 +801,7 @@ impl PropWriter {
                         //if meta.permissions().readonly() {
                         //    attr |= 0x0001;
                         //}
-                        if path.file_name().starts_with(b".") {
+                        if path.file_name_bytes().starts_with(b".") {
                             attr |= 0x0002;
                         }
                         if meta.is_dir() {

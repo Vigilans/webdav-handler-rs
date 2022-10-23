@@ -77,6 +77,16 @@ impl crate::DavInner {
         if let Some(n) = req.headers().typed_get::<headers::ContentLength>() {
             count = n.0;
             have_count = true;
+            oo.size = Some(count);
+        } else if let Some(n) = req.headers()
+                                   .get("X-Expected-Entity-Length")
+                                   .and_then(|v| v.to_str().ok()) {
+            // macOS Finder, see https://evertpot.com/260/
+            if let Ok(len) = n.parse() {
+                count = len;
+                have_count = true;
+                oo.size = Some(count);
+            }
         }
         let path = self.path(&req);
         let meta = self.fs.metadata(&path).await;

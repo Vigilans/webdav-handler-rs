@@ -2,6 +2,9 @@
 //!
 use std::error::Error;
 use std::ffi::OsStr;
+#[cfg(target_os = "windows")]
+use std::ffi::OsString;
+#[cfg(target_family = "unix")]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -9,6 +12,15 @@ use mime_guess;
 use percent_encoding as pct;
 
 use crate::DavError;
+
+// Encode all non-unreserved characters, except '/'.
+// See RFC3986, and https://en.wikipedia.org/wiki/Percent-encoding .
+const PATH_ENCODE_SET: &pct::AsciiSet = &pct::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~')
+    .remove(b'/');
 
 /// URL path, with hidden prefix.
 #[derive(Clone)]
@@ -23,29 +35,9 @@ pub struct DavPathRef {
     fullpath: [u8],
 }
 
-#[derive(Copy, Clone, Debug)]
-#[allow(non_camel_case_types)]
-struct ENCODE_SET;
-
-impl pct::EncodeSet for ENCODE_SET {
-    // Encode all non-unreserved characters, except '/'.
-    // See RFC3986, and https://en.wikipedia.org/wiki/Percent-encoding .
-    #[inline]
-    fn contains(&self, byte: u8) -> bool {
-        let unreserved = (byte >= b'A' && byte <= b'Z') ||
-            (byte >= b'a' && byte <= b'z') ||
-            (byte >= b'0' && byte <= b'9') ||
-            byte == b'-' ||
-            byte == b'_' ||
-            byte == b'.' ||
-            byte == b'~';
-        !unreserved && byte != b'/'
-    }
-}
-
 impl std::fmt::Display for DavPath {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", &self.as_url_string_with_prefix_debug())
+        write!(f, "{}", self.as_pathbuf().display())
     }
 }
 
@@ -102,7 +94,7 @@ fn valid_segment(src: &[u8]) -> Result<(), ParseError> {
 
 // encode path segment with user-defined ENCODE_SET
 fn encode_path(src: &[u8]) -> Vec<u8> {
-    pct::percent_encode(src, ENCODE_SET).to_string().into_bytes()
+    pct::percent_encode(src, PATH_ENCODE_SET).to_string().into_bytes()
 }
 
 // make path safe:
@@ -294,7 +286,7 @@ impl DavPath {
     }
 
     /// Return the parent directory.
-    pub(crate) fn parent(&self) -> DavPath {
+    pub fn parent(&self) -> DavPath {
         let mut segs = self
             .fullpath
             .split(|&c| c == b'/')
@@ -339,7 +331,10 @@ impl DavPathRef {
         if b.len() > 1 && b.ends_with(b"/") {
             b = &b[..b.len() - 1];
         }
+        #[cfg(not(target_os = "windows"))]
         let os_string = OsStr::from_bytes(b).to_owned();
+        #[cfg(target_os = "windows")]
+        let os_string = OsString::from(String::from_utf8(b.to_vec()).unwrap());
         PathBuf::from(os_string)
     }
 
@@ -376,13 +371,16 @@ impl DavPathRef {
         if path.ends_with(b"/") {
             path = &path[..path.len() - 1];
         }
+        #[cfg(not(target_os = "windows"))]
         let os_string = OsStr::from_bytes(path);
+        #[cfg(target_os = "windows")]
+        let os_string : &OsStr = std::str::from_utf8(path).unwrap().as_ref();
         Path::new(os_string)
     }
 
     // get parent.
     #[allow(dead_code)]
-    pub(crate) fn parent(&self) -> &DavPathRef {
+    pub fn parent(&self) -> &DavPathRef {
         let path = self.get_path();
 
         let mut end = path.len();
@@ -399,7 +397,7 @@ impl DavPathRef {
     }
 
     /// The filename is the last segment of the path. Can be empty.
-    pub(crate) fn file_name(&self) -> &[u8] {
+    pub fn file_name_bytes(&self) -> &[u8] {
         let segs = self
             .get_path()
             .split(|&c| c == b'/')
@@ -412,8 +410,18 @@ impl DavPathRef {
         }
     }
 
+    /// The filename is the last segment of the path. Can be empty.
+    pub fn file_name(&self) -> Option<&str> {
+        let name = self.file_name_bytes();
+        if name.is_empty() {
+            None
+        } else {
+            std::str::from_utf8(name).ok()
+        }
+    }
+
     pub(crate) fn get_mime_type_str(&self) -> &'static str {
-        let name = self.file_name();
+        let name = self.file_name_bytes();
         let d = name.rsplitn(2, |&c| c == b'.').collect::<Vec<&[u8]>>();
         if d.len() > 1 {
             if let Ok(ext) = std::str::from_utf8(d[0]) {
